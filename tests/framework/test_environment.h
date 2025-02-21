@@ -67,10 +67,11 @@
 
 #include "shim/shim.h"
 
-#include "icd/physical_device.h"
 #include "icd/test_icd.h"
 
 #include "layer/test_layer.h"
+
+#include FRAMEWORK_CONFIG_HEADER
 
 // Useful defines
 #if COMMON_UNIX_PLATFORMS
@@ -621,11 +622,13 @@ enum class ManifestLocation {
     explicit_layer_env_var = 4,
     explicit_layer_add_env_var = 5,
     implicit_layer = 6,
-    override_layer = 7,
-    windows_app_package = 8,
-    macos_bundle = 9,
-    unsecured_location = 10,
-    settings_location = 11,
+    implicit_layer_env_var = 7,
+    implicit_layer_add_env_var = 8,
+    override_layer = 9,
+    windows_app_package = 10,
+    macos_bundle = 11,
+    unsecured_location = 12,
+    settings_location = 13,
 };
 
 struct FrameworkSettings {
@@ -656,6 +659,9 @@ struct FrameworkEnvironment {
     // apply any changes made to FrameworkEnvironment's loader_settings member
     void update_loader_settings(const LoaderSettings& loader_settings) noexcept;
     void remove_loader_settings();
+
+    void write_file_from_source(const char* source_file, ManifestCategory category, ManifestLocation location,
+                                std::string const& file_name);
 
     TestICD& get_test_icd(size_t index = 0) noexcept;
     TestICD& reset_icd(size_t index = 0) noexcept;
@@ -697,6 +703,8 @@ struct FrameworkEnvironment {
     EnvVarWrapper add_env_var_vk_icd_filenames{"VK_ADD_DRIVER_FILES"};
     EnvVarWrapper env_var_vk_layer_paths{"VK_LAYER_PATH"};
     EnvVarWrapper add_env_var_vk_layer_paths{"VK_ADD_LAYER_PATH"};
+    EnvVarWrapper env_var_vk_implicit_layer_paths{"VK_IMPLICIT_LAYER_PATH"};
+    EnvVarWrapper add_env_var_vk_implicit_layer_paths{"VK_ADD_IMPLICIT_LAYER_PATH"};
 
     LoaderSettings loader_settings;  // the current settings written to disk
    private:

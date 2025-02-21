@@ -36,9 +36,7 @@ if (is_win) {
 }
 
 config("vulkan_internal_config") {
-  defines = [
-    "VK_ENABLE_BETA_EXTENSIONS",
-  ]
+  defines = [ "VK_ENABLE_BETA_EXTENSIONS" ]
   if (is_clang || !is_win) {
     cflags = [
       "-Wno-conversion",
@@ -83,8 +81,11 @@ config("vulkan_loader_config") {
     cflags = [ "/wd4201" ]
   }
   if (is_linux || is_chromeos) {
-    # assume secure_getenv() is available
     defines += [
+      # Enables `readlink()` and `strtok_r()`.
+      "_GNU_SOURCE",
+
+      # assume secure_getenv() is available
       "HAVE_SECURE_GETENV",
       "LOADER_ENABLE_LINUX_SORT",
     ]
@@ -98,6 +99,69 @@ if (!is_android) {
     library_type = "shared_library"
   } else {
     library_type = "static_library"
+  }
+  support_unknown_function_handling = false
+  if (defined(ar_path) && ar_path != "" && !is_win && (current_cpu == "arm64" || current_cpu == "x86_64")) {
+    support_unknown_function_handling = true
+    static_library("asm_offset") {
+      sources = [ "loader/asm_offset.c" ]
+      deps = [
+        "$vulkan_headers_dir:vulkan_headers",
+      ]
+
+      if (is_fuchsia) {
+        deps += [
+          ":dlopen_fuchsia",
+        ]
+      }
+
+      # Output raw assembly instead of compiled object file. The assembly will be included as a member of the output ar file.
+      cflags = [ "-S" ]
+      configs += [ ":vulkan_internal_config" ]
+      configs += [ ":vulkan_loader_config" ]
+    }
+
+    action("gen_defines") {
+      script = "scripts/parse_asm_values.py"
+      deps = [ ":asm_offset" ]
+
+      inputs = [
+        "$target_out_dir/libasm_offset.a",
+        ar_path,
+      ]
+      if (current_cpu == "arm64") {
+        cpu = "aarch64"
+      } else {
+        cpu = "x86_64"
+      }
+      args = [
+        rebase_path("$target_gen_dir/gen_defines.asm", root_build_dir),
+        rebase_path("$target_out_dir/libasm_offset.a", root_build_dir),
+        "GAS",
+        "Clang",
+        cpu,
+        rebase_path(ar_path, root_build_dir),
+        "libasm_offset.asm_offset.c.o",
+      ]
+      outputs = [ "$target_gen_dir/gen_defines.asm" ]
+    }
+  }
+
+  if (is_win) {
+    action("gen_loader_rc") {
+      script = "scripts/generate_loader_rc.py"
+      inputs = [
+        "loader/loader.rc",
+      ]
+      args = [
+        rebase_path("loader/loader.rc", root_build_dir),
+        rebase_path("$target_gen_dir/loader.rc", root_build_dir),
+      ]
+      if (is_official_build) {
+        args += [ "--is_official" ]
+      }
+      outputs = [ "$target_gen_dir/loader.rc" ]
+    }
   }
 
   target(library_type, "libvulkan") {
@@ -123,6 +187,8 @@ if (!is_android) {
       "loader/loader_environment.h",
       "loader/loader.c",
       "loader/loader.h",
+      "loader/loader_json.c",
+      "loader/loader_json.h",
       "loader/log.c",
       "loader/log.h",
       # Should only be linked when assembler is used
@@ -135,8 +201,6 @@ if (!is_android) {
       "loader/unknown_function_handling.h",
       "loader/unknown_function_handling.c",
       "loader/vk_loader_layer.h",
-
-      # TODO(jmadill): Use assembler where available.
       "loader/vk_loader_platform.h",
       "loader/wsi.c",
       "loader/wsi.h",
@@ -157,13 +221,14 @@ if (!is_android) {
       }
     }
 
+    deps = []
     if (is_win) {
       sources += [
         "loader/dirent_on_windows.c",
         "loader/dirent_on_windows.h",
         "loader/loader_windows.c",
         "loader/loader_windows.h",
-        "loader/loader.rc",
+        "$target_gen_dir/loader.rc",
         "loader/vulkan-1.def",
       ]
       if (!is_clang) {
@@ -186,6 +251,7 @@ if (!is_android) {
         cflags = [ "-Wno-incompatible-pointer-types" ]
       }
       libs = [ "Cfgmgr32.lib" ]
+      deps += [ ":gen_loader_rc" ]
     }
     if (is_linux || is_chromeos) {
       sources += [
@@ -197,8 +263,10 @@ if (!is_android) {
       frameworks = [ "CoreFoundation.framework" ]
     }
     public_deps = [ "$vulkan_headers_dir:vulkan_headers" ]
-    configs -= [ "//build/config/compiler:chromium_code" ]
-    configs += [ "//build/config/compiler:no_chromium_code" ]
+    if (build_with_chromium) {
+      configs -= [ "//build/config/compiler:chromium_code" ]
+      configs += [ "//build/config/compiler:no_chromium_code" ]
+    }
     configs += [ ":vulkan_internal_config" ]
     public_configs = [ ":vulkan_loader_config" ]
     configs -= vulkan_undefine_configs
@@ -210,12 +278,25 @@ if (!is_android) {
       # which can be obtained separately from the loader implementation itself.
       no_headers = true
 
-      deps = [
+      deps += [
         ":dlopen_fuchsia",
         "//sdk/lib/fdio",
       ]
 
       runtime_deps = [ "//sdk/lib/fdio:fdio_sdk" ]
+    }
+    if (support_unknown_function_handling) {
+      if (current_cpu == "arm64") {
+        sources += [ "loader/unknown_ext_chain_gas_aarch.S" ]
+      } else if (current_cpu == "x86_64") {
+        sources += [ "loader/unknown_ext_chain_gas_x86.S" ]
+      } else {
+        assert(false, "Unexpected CPU $current_cpu")
+      }
+
+      defines += ["UNKNOWN_FUNCTIONS_SUPPORTED=1"]
+      deps += [ ":gen_defines" ]
+      include_dirs = [ "$target_gen_dir" ]
     }
   }
 }
